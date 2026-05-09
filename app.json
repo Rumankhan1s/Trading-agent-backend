@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "ae62bde5-4519-4405-a082-61fe9db9c1bc"
+      }
+    },
+    "android": {
+      "package": "com.rumankhan1s.tradingagent"
+    }
+  }
+}

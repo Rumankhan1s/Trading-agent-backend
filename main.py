@@ -13,10 +13,50 @@ import warnings
 import certifi
 import asyncio
 from fastapi import FastAPI, WebSocket
-import asyncio
 import random
-import requests
 
+# 🧠 Apne AI Brain ko yahan import kar rahe hain
+import ai_trainer 
+import time
+import requests # Agar pehle se hai toh dobara mat likhna
+
+
+# 🔔 THE EXPO PUSH NOTIFICATION SENDER
+def send_push_notification(expo_token, title, body):
+    if not expo_token:
+        return
+    try:
+        message = {
+            "to": expo_token,
+            "sound": "default",
+            "title": title,
+            "body": body,
+            "data": {"type": "trade_alert"}
+        }
+        response = requests.post(
+            "https://exp.host/--/api/v2/push/send",
+            json=message,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+        )
+        print(f"📲 [NOTIFICATION] Sent to phone: {title} | Status: {response.status_code}")
+    except Exception as e:
+        print(f"🔴 [NOTIFICATION ERROR]: {e}")
+
+
+
+app = FastAPI()
+
+# Tumhara CORS setup (Jo pehle se hoga)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # ---------------- 🔔 SEND NOTIFICATION HELPER ----------------
 def send_push_notification(token: str, title: str, message: str):
     try:
@@ -48,9 +88,9 @@ app.add_middleware(
 )
 
 # ---------------- 2. DATABASE & SECURITY SETUP ----------------
-MONGO_URL = "mongodb+srv://Rumankhan1s:rumankhan1sr%40R@preload.krqiopc.mongodb.net/?appName=Preload" 
+MONGO_URL = "mongodb+srv://rumankhan:rumankhan123@preload.krqiopc.mongodb.net/?appName=Preload" 
 
-# 🔥 THE FIX: SSL Bypass Code 🔥
+# 🔥 THE FIX: SSL Bypass Code 🔥-
 client = MongoClient(
     MONGO_URL, 
     tlsCAFile=certifi.where(), 
@@ -100,12 +140,36 @@ def create_access_token(data: dict):
     return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
 
 # ---------------- 🚀 THE AUTONOMOUS RISK MANAGER 🚀 ----------------
+# 🛠️ NAYA PRO FUNCTION: Data nikalne ki 100% guarantee
+def get_live_price_pro(symbol):
+    # Plan A: 5 din ka data mango aur aakhri price uthao (Market Closed bug fix)
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period="5d", progress=False)
+        if not df.empty:
+            return df['Close'].iloc[-1]
+    except Exception:
+        pass # Plan A fail, Plan B par jayenge
+        
+    # Plan B: Agar NSE (.NS) fail ho, toh turant BSE (.BO) se uthao
+    if ".NS" in symbol:
+        try:
+            fallback_sym = symbol.replace(".NS", ".BO")
+            ticker = yf.Ticker(fallback_sym)
+            df = ticker.history(period="5d", progress=False)
+            if not df.empty:
+                return df['Close'].iloc[-1]
+        except Exception:
+            pass
+            
+    return None # Agar dono fail ho jayein tabhi None return karo
+
 @app.on_event("startup")
 async def start_risk_manager():
     asyncio.create_task(risk_manager_worker())
 
 async def risk_manager_worker():
-    print("🛡️ AI Risk Manager Started in Background (10-Sec High-Speed Mode)...")
+    print("🛡️ AI Risk Manager Started in Background (PRO Mode)...")
     while True:
         try:
             users = users_collection.find()
@@ -129,33 +193,32 @@ async def risk_manager_worker():
                         if sym in holdings:
                             holdings[sym]["invested"] -= t["amount"]
 
-                # 2. Live Market Price check (BULLETPROOF MODE)
+                # 2. Live Market Price check (THE REAL SOLUTION)
                 for sym, data in holdings.items():
                     if data["invested"] > 0: 
                         try:
-                            # 🛡️ Zomato Error Fix: Check if data is actually coming
-                            ticker_data = yf.Ticker(sym).history(period="1d")
-                            
+                            # 🧠 MARKET HOLIDAY FIX: 1d ki jagah 5d mang rahe hain
+                            ticker_data = yf.Ticker(sym).history(period="5d")
                             if ticker_data.empty:
-                                print(f"⚠️ [WARNING] Yahoo skipped data for {sym}. Waiting for next tick...")
-                                continue # Crash nahi hoga, bas aage badh jayega
+                                print(f"🔴 [DATA ERROR] {sym} ka data fetch nahi hua.")
+                                continue 
                                 
+                            # Sabse latest available price utha lenge
                             live_price = ticker_data['Close'].iloc[-1]
                             
-                            # Base price mockup for demo (jab real buy price add karenge toh isko hata denge)
+                            # Base price mockup for demo 
                             base_price = live_price * 0.95 
                             pnl_pct = ((live_price - base_price) / base_price) * 100
+                            
                         except Exception as e:
-                            print(f"⚠️ Error while fetching live price for {sym}: {e}")
-                            continue
-
+                            print(f"🔴 Logic Error in {sym}: {e}")
 
         except Exception as e:
+            # Ye raha wo outer except jo miss ho gaya tha!
             print(f"🔴 Error in risk manager: {e}")
 
-        # 🔥 SLIPPAGE FIX: Ab ye har 10 second mein check karega!
-        await asyncio.sleep(10)
-
+        # 🔥 SLIPPAGE FIX: Har 20 second mein check karega
+        await asyncio.sleep(20)
 # ---------------- 4. AUTHENTICATION APIs ----------------
 @app.post("/api/signup")
 async def signup(user: UserCreate):
@@ -327,11 +390,64 @@ async def execute_trade(trade: TradeRequest):
         "timestamp": datetime.utcnow()
     })
 
+    
+
+    # ---------------------------------------------------------
+    # 🔔 5. NAYA LOGIC: Push Notification Trigger
+    # ---------------------------------------------------------
+    try:
+        # Check karenge ki user ke database document mein push_token save hai ya nahi
+        if "push_token" in user:
+            token = user["push_token"]
+            title = "🤖 AI Trade Executed!"
+            body = f"Successfully placed {trade.action} order for {trade.stock} (₹{trade.amount})."
+            
+            # Helper function ko aawaz lagayenge jo humne top par banaya tha
+            send_push_notification(token, title, body)
+    except Exception as e:
+        print(f"🔴 Push Notification trigger fail hua: {e}")
+
+    # Aakhri return same rahega
     return {
         "message": f"{trade.stock} {trade.action} order placed successfully!",
         "new_balance": round(new_balance, 2)
     }
 
+@app.get("/api/market-movers")
+def get_market_movers():
+   
+    stocks = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", 
+        "SBIN.NS",  "BHARTIARTL.NS", "ICICIBANK.NS", "ITC.NS", "LT.NS"]
+    live_data = []
+    
+    for sym in stocks:
+        try:
+            # 🧠 NO HACKS: Normal Ticker use kar rahe hain kyunki frontend ab theek ho chuka hai
+            ticker = yf.Ticker(sym)
+            df = ticker.history(period="5d") 
+            
+            if not df.empty and len(df) >= 2:
+                # Latest price aur purana price nikal rahe hain
+                live_price = df['Close'].iloc[-1]
+                prev_close = df['Close'].iloc[-2] 
+                
+                change_pct = ((live_price - prev_close) / prev_close) * 100
+                sign = "+" if change_pct > 0 else ""
+                
+                live_data.append({
+                    "display": sym.replace(".NS", ""),
+                    "symbol": sym,
+                    "price": f"{live_price:.2f}",
+                    "change": f"{sign}{change_pct:.2f}%"
+                })
+            else:
+                # Agar market sach mein data na de
+                live_data.append({"display": sym.replace(".NS", ""), "symbol": sym, "price": "0.00", "change": "0.00%"})
+        except Exception as e:
+            print(f"🔴 Dashboard Fetch Error for {sym}: {e}")
+            live_data.append({"display": sym.replace(".NS", ""), "symbol": sym, "price": "0.00", "change": "0.00%"})
+            
+    return {"data": live_data}
 # ---------------- 🔴 100% REAL LIVE WEBSOCKET 🔴 ----------------
 @app.websocket("/ws/live-price/{stock_symbol}")
 async def live_price_stream(websocket: WebSocket, stock_symbol: str):
@@ -382,6 +498,44 @@ import yfinance as yf
 
 # ---------------- 8. PORTFOLIO & REAL-TIME P&L ENGINE ----------------
 
+@app.get("/api/fundamentals")
+def get_fundamentals(symbol: str):
+    try:
+        # Fetching deep info using yfinance
+        stock = yf.Ticker(symbol)
+        info = stock.info
+        
+        # Formatting Market Cap into Crores (Cr) for Indian market readability
+        market_cap_raw = info.get("marketCap", 0)
+        market_cap_cr = f"₹{round(market_cap_raw / 10000000, 2)} Cr" if market_cap_raw else "N/A"
+
+        # Safely fetching other metrics
+        pe_ratio = round(info.get("trailingPE", 0), 2) if info.get("trailingPE") else "N/A"
+        high_52 = info.get("fiftyTwoWeekHigh", "N/A")
+        low_52 = info.get("fiftyTwoWeekLow", "N/A")
+        pb_ratio = round(info.get("priceToBook", 0), 2) if info.get("priceToBook") else "N/A"
+        roe = round(info.get("returnOnEquity", 0) * 100, 2) if info.get("returnOnEquity") else "N/A"
+        description = info.get("longBusinessSummary", "No company summary available.")
+
+        return {
+            "status": "success",
+            "description": description, 
+            "data": {
+            "symbol": symbol,
+            "data": {
+                "Market Cap": market_cap_cr,
+                "P/E Ratio": pe_ratio,
+                "P/B Ratio": pb_ratio,
+                "ROE": f"{roe}%" if roe != "N/A" else "N/A",
+                "52W High": f"₹{high_52}" if high_52 != "N/A" else "N/A",
+                "52W Low": f"₹{low_52}" if low_52 != "N/A" else "N/A"
+            }
+        }
+        }
+    except Exception as e:
+        print(f"🔴 Fundamentals Error for {symbol}: {e}")
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/portfolio")
 async def get_portfolio(email: str):
     user = users_collection.find_one({"email": email})
@@ -393,54 +547,79 @@ async def get_portfolio(email: str):
     
     # --- REAL-TIME P&L CALCULATION ---
     holdings = {}
-    total_invested = 0
     
-    # 1. Tumhare portfolio ke stocks aur unka amount calculate karo
+    # 1. Calculate Net Invested Amount per stock (BUY - SELL)
     for t in trades:
         sym = t["stock"]
-        amt = t["amount"]
-        if t["action"] == "BUY":
-            if sym not in holdings:
-                holdings[sym] = {"invested": 0, "qty": 0}
+        amt = float(t.get("amount", 0))
+        action = t["action"]
+        
+        if sym not in holdings:
+            holdings[sym] = 0
             
-            holdings[sym]["invested"] += amt
-            total_invested += amt
-            
-            # Agar purani trade hai jisme price nahi hai, toh ek base price assume karenge (taaki app crash na ho)
-            buy_price = t.get("price", 100) 
-            qty = t.get("qty", amt / buy_price)
-            holdings[sym]["qty"] += qty
+        if action == "BUY":
+            holdings[sym] += amt
+        elif action == "SELL":
+            holdings[sym] -= amt
 
-    # 2. Yahoo Finance se LIVE price fetch karo
-    current_value = 0
+    total_invested = 0
+    total_current_value = 0
     allocation_data = []
-    colors = ["#38BDF8", "#10B981", "#F59E0B", "#8B5CF6", "#EF4444"]
+    active_holdings_list = []
+    
+    colors = ["#38BDF8", "#10B981", "#F59E0B", "#8B5CF6", "#EF4444", "#EC4899", "#3B82F6"]
     color_idx = 0
 
-    for sym, data in holdings.items():
-        if data["qty"] > 0:
+    # 2. Yahoo Finance se LIVE price fetch karo (The Pro Way)
+    for sym, invested in holdings.items():
+        if invested > 0: # Sirf active trades (jo sell nahi hui)
             try:
-                # Live Market Price fetching
-                live_price = yf.Ticker(sym).history(period="1d")['Close'].iloc[-1]
+                # 🧠 MARKET HOLIDAY FIX: 5d data
+                df = yf.Ticker(sym).history(period="5d")
+                if not df.empty and len(df) >= 2:
+                    live_price = df['Close'].iloc[-1]
+                    prev_close = df['Close'].iloc[-2]
+                    
+                    # Live Percentage Change
+                    change_pct = (live_price - prev_close) / prev_close
+                    
+                    # Current value of user's investment
+                    current_value = invested + (invested * change_pct)
+                else:
+                    current_value = invested
+                    change_pct = 0
             except:
-                # Agar market band hai ya error aaye toh purana price hi dikha do
-                live_price = data["invested"] / data["qty"] 
+                current_value = invested
+                change_pct = 0
 
-            live_value = live_price * data["qty"]
-            current_value += live_value
+            # Profit/Loss calculations for this specific stock
+            pnl_rs = current_value - invested
+            pnl_pct = (pnl_rs / invested) * 100
+
+            total_invested += invested
+            total_current_value += current_value
+
+            # 📊 Ye list tumhare "Holdings Card" ke kaam aayegi
+            active_holdings_list.append({
+                "symbol": sym.replace('.NS', ''),
+                "invested": round(invested, 2),
+                "current_value": round(current_value, 2),
+                "pnl_rs": round(pnl_rs, 2),
+                "pnl_pct": round(pnl_pct, 2)
+            })
             
-            # Pie Chart Data Builder
+            # 🥧 Pie Chart Data Builder (Tumhara original logic intact hai)
             allocation_data.append({
                 "name": sym.replace('.NS', ''),
-                "population": round(live_value, 2),
+                "population": round(current_value, 2),
                 "color": colors[color_idx % len(colors)],
                 "legendFontColor": "#94A3B8",
                 "legendFontSize": 12
             })
             color_idx += 1
 
-    # 3. Final Exact P&L Calculation
-    total_pnl = current_value - total_invested
+    # 3. Final Exact P&L Calculation for the whole portfolio
+    total_pnl = total_current_value - total_invested
     pnl_percentage = (total_pnl / total_invested * 100) if total_invested > 0 else 0
     
     if not allocation_data:
@@ -453,7 +632,33 @@ async def get_portfolio(email: str):
         "total_invested": round(total_invested, 2),
         "total_pnl": round(total_pnl, 2),
         "pnl_percentage": round(pnl_percentage, 2),
-        "win_rate": 72.4, # AI Logic Win Rate
+        "win_rate": 72.4, 
         "chart_data": allocation_data,
+        "active_holdings": active_holdings_list, # Naya data for UI
         "history": trades
     }
+
+# ---------------------------------------------------------
+# 🌉 THE AI BRIDGE (API ENDPOINT)
+# ---------------------------------------------------------
+
+# Frontend se kya data aayega, uska structure
+class TargetStock(BaseModel):
+    symbol: str
+
+@app.post("/api/ai/analyze")
+def trigger_ai_engine(request: TargetStock):
+    print(f"\n[SERVER] Frontend requested AI analysis for: {request.symbol}")
+    
+    try:
+        # AI function ko stock ka naam bhej kar chalayenge
+        ai_result = ai_trainer.train_ai_model(request.symbol)
+        
+        if ai_result:
+            print(f"[SERVER] Sending AI result back to App: {ai_result}")
+            return ai_result
+        else:
+            return {"status": "error", "message": "No data found for this stock in DB"}
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

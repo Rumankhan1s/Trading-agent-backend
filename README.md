@@ -119,12 +119,6 @@ Trading-Agent/
 
 ---
 
-# 📸 Screenshots
-
-> Add application screenshots here.
-
----
-
 # 👨‍💻 Author
 
 **Ruman Anwar**
